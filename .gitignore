@@ -1,0 +1,42 @@
+# 本地覆盖配置（含 token / key 指向），不进版本库
+config.local.yaml
+
+# 环境密钥
+.env
+*.key
+
+# 数据与产物
+# CIC-IDS2017 原始 8 个 CSV（844 MB），用 tools/build_sample.py 重建
+data/raw/
+# 抽样后的小样本，同样可重建
+data/*.csv
+data/*_manifest.json
+data/pcap/*.pcap
+data/features/*.csv
+# BM25 索引是产物；chunks.json 是手写的语料，必须进版本库
+data/rag/*.index
+data/netsentinel*.db
+# 训练产物里只有"跑起来必需的两个"进库（2.4 MB），其余每次训练都重写，不进
+models/artifacts/*
+!models/artifacts/best_model.pkl
+!models/artifacts/feature_schema.json
+!data/pcap/.gitkeep
+!data/features/.gitkeep
+!data/rag/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Office / WPS 打开文档时留下的锁文件
+~$*
+docs/.~*
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store

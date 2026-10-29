@@ -1,0 +1,115 @@
+# NetSentinel-LLM 统一配置
+# 本文件是默认值；本地覆盖写 config.local.yaml，加载时深度合并，不进版本库。
+
+project:
+  name: NetSentinel-LLM
+  version: 0.1.0
+
+probe:
+  interface: auto           # 网卡名；auto 表示自动挑一张有流量的接口
+  bpf_filter: ""            # BPF 过滤表达式，空表示全量抓包
+  snapshot_len: 65535
+  promisc: true
+  aggregate_window: 2.0     # 会话特征聚合窗口，单位秒
+  max_flows: 5000           # 内存中同时保留的会话数上限，超出按最近活跃淘汰
+  pcap_dir: data/pcap
+  feature_csv_dir: data/features
+
+center:
+  host: 0.0.0.0
+  port: 8000
+  token: change-me          # 探针上报鉴权；部署时务必改
+  db_path: data/netsentinel.db
+  model_path: models/artifacts/best_model.pkl
+  schema_path: models/artifacts/feature_schema.json
+
+model:
+  # M8 五模型对比实验；线上推理只加载评估阶段选出的 best_model.pkl
+  candidates:
+    - decision_tree
+    - random_forest
+    - xgboost
+    - logistic
+    - hybrid_forest
+  test_size: 0.1
+  val_size: 0.2
+  random_state: 42
+
+  # 各模型超参：同一份特征、同一划分、同一随机种子，保证同口径
+  decision_tree:
+    max_depth: 24
+    class_weight: balanced
+
+  random_forest:
+    n_estimators: 100
+    max_depth: 24            # 20 几层的护栏；该数据量下单树自然只长到 18–20 层
+    min_samples_leaf: 1
+    class_weight: balanced
+    n_jobs: -1
+
+  xgboost:
+    n_estimators: 300
+    max_depth: 6             # 提升器标准深度，不用 24
+    learning_rate: 0.1
+    subsample: 0.9
+    n_jobs: -1
+
+  logistic:
+    max_iter: 1000
+    class_weight: balanced
+
+  # 混合森林：Bagging 骨架 + 随机抽到的提升模型作基学习器
+  hybrid_forest:
+    n_estimators: 24         # 基学习器个数（每个都是一整个提升模型）
+    max_depth: 24            # Bagging 骨架的深度约束
+    max_features: "sqrt"     # 每个基学习器看到的随机特征子集
+                             # ★ 实测（25 万行真实样本）：sqrt 让每成员只看到 8/78 维，
+                             #   reliable macro-F1 0.9899；改成 1.0 是 0.9986。
+                             #   随机特征子集是随机森林压方差的手段，提升器缺的不是方差而是信息，
+                             #   砍特征等于让每轮残差学偏。想复现"随机森林进化版"的原始设定就留 sqrt，
+                             #   想拿最高指标就改 1.0，两者都写进报告对比。
+    base_depth: 6            # ★ 提升器内部浅树深度；设成 24 会退化成单棵大树
+    base_rounds: 100         # 每个基学习器的提升轮数（多分类下每轮每类一棵树）
+    base_pool: [xgboost, lightgbm, catboost]   # 每个基学习器随机三选一
+    random_state: 42
+
+  # 附：DART 消融实验（不参与五模型主对比，单列一节写进报告）
+  # 目的：验证"随机丢弃已建树"能否抑制提升器对噪声的过专门化。
+  # 设计：固定基学习器为 LightGBM，只改 boosting_type 一处变量，避免混淆。
+  # 注意：CatBoost 没有 DART 实现，故不作为消融载体。
+  dart_ablation:
+    enabled: true
+    n_estimators: 24
+    max_features: "sqrt"
+    base_depth: 6
+    base_rounds: 100
+    variants:
+      - name: lgbm_plain
+        boosting_type: gbdt
+      - name: lgbm_dart
+        boosting_type: dart
+        drop_rate: 0.10      # 每轮随机丢弃 10% 已建好的树
+        skip_drop: 0.50      # 有一半概率整轮跳过丢弃，退回普通 GBDT
+        max_drop: 50         # 单轮最多丢 50 棵
+
+llm:
+  provider: deepseek        # deepseek / qwen，两者都走 OpenAI 兼容协议
+  base_url: https://api.deepseek.com
+  model: deepseek-chat
+  api_key_env: DEEPSEEK_API_KEY   # 从环境变量取名，不在此处写明文
+  temperature: 0.2
+  timeout: 30
+  max_retries: 2
+  max_tokens: 1500
+
+rag:
+  # 知识库规模只有十几条中文段落，查询词是固定的类别名 + 特征名。
+  # 这个量级下字符二元组 BM25 与向量检索效果相当，却少一个 torch 依赖、少一个失效点。
+  # 要换成向量库时只改 llm/rag.py，接口 retrieve(query, top_k) 不变。
+  backend: bm25
+  chunks_path: data/rag/chunks.json
+  top_k: 3
+
+dashboard:
+  center_url: http://127.0.0.1:8000
+  refresh_interval: 2.0
